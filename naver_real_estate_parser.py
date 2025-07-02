@@ -1,3 +1,5 @@
+import re
+
 import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -49,36 +51,57 @@ def parse_article_data(data: dict) -> dict:
         "aptParkingCountPerHousehold"
     )
 
+    # === 🧠 거래유형별 가격 조건 처리 ===
+    price_info = {}
+    loan_amount = price.get("financePrice", 0)
+    loan_type = None  # 원본 데이터에 명시적 필드가 없으므로 None 처리
+
     if trade_type == "매매":
         price_info = {
             "sale_price": price.get("dealPrice", ""),
-            "loan_amount": price.get("financePrice", 0),
-            "loan_info": "",
+            "loan_amount": loan_amount,
+            "loan_type": loan_type,
         }
     elif trade_type == "전세":
         price_info = {
-            "charter_price": price.get("dealPrice", ""),
-            "loan_amount": price.get("financePrice", 0),
-            "loan_info": "",
+            "jeonse_price": price.get("warrantPrice", 0),
+            "loan_amount": loan_amount,
+            "loan_type": loan_type,
         }
     elif trade_type == "월세":
         price_info = {
             "deposit": price.get("warrantPrice", 0),
             "rent_price": price.get("rentPrice", 0),
-            "loan_amount": price.get("financePrice", 0),
-            "loan_info": "",
+            "loan_amount": loan_amount,
+            "loan_type": loan_type,
         }
-    elif trade_type == "단기":
+    elif trade_type == "단기임대":
+        description = detail.get("detailDescription", "")
+        term_month = None
+        term_condition = None
+
+        match = re.search(r"(\d+)\s*개월", description)
+        if match:
+            term_month = int(match.group(1))
+
+        if "이내 협의" in description:
+            term_condition = "이내 협의가능"
+        elif "이상 협의" in description:
+            term_condition = "이상 협의가능"
+        elif "협의" in description:
+            term_condition = "협의없음"
+        else:
+            term_condition = "협의없음"
+
         price_info = {
             "deposit": price.get("warrantPrice", 0),
             "rent_price": price.get("rentPrice", 0),
-            "contract_period_month": None,  # no info
+            "contract_period_month": term_month,
+            "contract_period_condition": term_condition,
             "negotiable": move_in.get("negotiable"),
-            "loan_amount": price.get("financePrice", 0),
-            "loan_info": "",
+            "loan_amount": loan_amount,
+            "loan_type": loan_type,
         }
-    else:
-        price_info = {}
 
     result = {
         "trade_type": trade_type,

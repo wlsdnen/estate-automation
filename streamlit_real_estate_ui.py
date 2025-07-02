@@ -1,9 +1,10 @@
+import datetime
+import re
 import sqlite3
 
 import requests
 import streamlit as st
-from auto_estate_summary import auto_fill_estate_info
-from get_danji import get_apartment_list_by_bjd_code
+from apartment_complex_api import fetch_apartment_complexes_by_legal_code
 from naver_real_estate_parser import (
     fetch_article_data,
     get_redirected_article_url,
@@ -22,7 +23,6 @@ conn = get_conn()
 
 
 def map_api_to_form_fields(parsed_data: dict) -> dict:
-
     move_in_type = parsed_data["move_in"].get("type", "")
     move_in_date = parsed_data["move_in"].get("date", "")
     move_in_negotiate = parsed_data["move_in"].get("negotiable", False)
@@ -35,14 +35,12 @@ def map_api_to_form_fields(parsed_data: dict) -> dict:
         move_in_date_value = move_in_date if move_in_date else ""
 
     price_info = parsed_data.get("price_info", {})
-
     form_data = {
-        # 기본 매물 정보
         "property_type": parsed_data.get("property_type", ""),
         "complex_name": parsed_data.get("complex_name", ""),
         "building_usage": parsed_data.get("building_usage", ""),
-        "direction_base": parsed_data.get("direction", {}).get("based_on", "거실"),
-        "direction": parsed_data.get("direction", {}).get("aspect", "남"),
+        "direction_base": parsed_data.get("direction", {}).get("based_on", ""),
+        "direction": parsed_data.get("direction", {}).get("aspect", ""),
         "floor": str(parsed_data.get("address", {}).get("floor", "")),
         "address_dong": str(parsed_data.get("address", {}).get("dong", "")),
         "address_ho": str(parsed_data.get("address", {}).get("ho", "")),
@@ -52,14 +50,12 @@ def map_api_to_form_fields(parsed_data: dict) -> dict:
         "supply_area": str(parsed_data.get("supply_area", "")),
         "supply_area_type": parsed_data.get("supply_area_type", ""),
         "exclusive_area": str(parsed_data.get("exclusive_area", "")),
-        # 거래 조건
         "deal_type": parsed_data.get("trade_type", ""),
-        # 입주 가능일
-        "move_in_type": move_in_type_radio,  # 0: 즉시 입주, 1: 날짜 선택
+        "move_in_type": move_in_type_radio,
         "move_in_date_value": move_in_date_value,
         "move_in_negotiate": move_in_negotiate,
         "parking_total_spaces": str(
-            parsed_data.get("parking", {}).get("total_spaces", ""),
+            parsed_data.get("parking", {}).get("total_spaces", "")
         ),
         "parking_per_household": str(
             parsed_data.get("parking", {}).get("per_household", "")
@@ -67,8 +63,6 @@ def map_api_to_form_fields(parsed_data: dict) -> dict:
     }
 
     deal_type = parsed_data.get("trade_type", "")
-
-    # 거래유형별 필드 처리
     if deal_type == "매매":
         form_data.update(
             {
@@ -80,7 +74,7 @@ def map_api_to_form_fields(parsed_data: dict) -> dict:
     elif deal_type == "전세":
         form_data.update(
             {
-                "charter_price": str(price_info.get("charter_price", "")),
+                "jeonse_price": str(price_info.get("jeonse_price", "")),
                 "loan_amount": str(price_info.get("loan_amount", "")),
                 "loan_info": price_info.get("loan_type", ""),
             }
@@ -114,7 +108,7 @@ def map_api_to_form_fields(parsed_data: dict) -> dict:
 
 
 def get_beopjeongdong_code_ui(conn):
-    st.markdown("### 📍 지번 주소 입력")
+    st.markdown("### 지번 주소 입력")
     # 시도, 시군구, 읍면동, 리를 한 줄에 배치
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -204,7 +198,7 @@ def get_br_title_info(service_key, sigungu_cd, bjdong_cd, bun, ji):
         return {}
 
 
-st.title("🏠 매물 자동 정보 생성기")
+st.title("매물 자동 정보 생성기")
 
 bjd_code, full_address, sido, sigungu, bun, ji = get_beopjeongdong_code_ui(conn)
 
@@ -229,7 +223,6 @@ with center_col[1]:
                 naver_info = parse_article_data(article_data)
                 naver_parsed = map_api_to_form_fields(naver_info)
                 naver_parsed = naver_parsed.copy() if naver_info else {}
-                print(naver_parsed)
             except Exception as e:
                 naver_parsed = {}
         # 표제부 정보 조회
@@ -247,11 +240,10 @@ with center_col[1]:
 st.divider()
 
 # 기본 매물 정보 제목 (폰트 약간 크게)
-st.markdown("### 🏠 기본 매물 정보", unsafe_allow_html=True)
+st.markdown("### 기본 매물 정보", unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
 # 입력 폼의 기본값을 네이버/표제부 정보에서 가져오도록 처리
-# (Streamlit은 상태 저장이 필요하므로, st.session_state를 활용)
 if "naver_parsed" not in st.session_state:
     st.session_state["naver_parsed"] = {}
 if "br_title_parsed" not in st.session_state:
@@ -270,20 +262,18 @@ br_title_parsed = st.session_state.get("br_title_parsed", {})
 main_purpose = br_title_parsed.get("건축물용도", "") if br_title_parsed else ""
 is_apartment = "공동주택" in main_purpose
 
-print("-" * 30)
 # 단지 선택 (공동주택만)
 danji_name = ""
 if is_apartment and bjd_code:
-    apt_list = get_apartment_list_by_bjd_code(SERVICE_KEY, bjd_code)
+    apt_list = fetch_apartment_complexes_by_legal_code(SERVICE_KEY, bjd_code)
     if apt_list:
         danji_options = [f"{apt['kaptName']} ({apt['addr']})" for apt in apt_list]
         selected_danji_idx = st.selectbox(
-            "🏢 단지 목록",
+            "단지 목록",
             options=list(range(len(danji_options))),
             format_func=lambda i: danji_options[i],
         )
         danji_name = apt_list[selected_danji_idx]["kaptName"]
-        print(danji_name)
     else:
         st.warning("공동주택이지만 단지 목록이 없습니다.")
 elif main_purpose and not is_apartment:
@@ -355,32 +345,25 @@ room_positions = ["거실", "안방"]
 # 입력 폼 (기본 매물 정보)
 col_type = st.columns(2)
 with col_type[0]:
+    purpose_value = br_title_parsed.get(
+        "건축물용도", naver_parsed.get("building_usage", "")
+    )
     purpose = st.selectbox(
         "건축물 용도",
         purposes,
-        index=(
-            purposes.index(
-                br_title_parsed.get("건축물용도", naver_parsed.get("건축물용도", ""))
-            )
-            if (
-                br_title_parsed.get("건축물용도", naver_parsed.get("건축물용도", ""))
-                in purposes
-            )
-            else 0
-        ),
+        index=purposes.index(purpose_value) if purpose_value in purposes else 0,
     )
 with col_type[1]:
     property_type = st.selectbox(
         "매물 종류",
         property_types,
-        index=(
-            property_types.index(naver_parsed.get("거래종류", "아파트"))
-            if naver_parsed.get("거래종류") in property_types
-            else 0
-        ),
+        index=(0),
     )
 
-# 방향(위치), 방향 한 줄에
+# 방향(위치), 방향
+pos_value = naver_parsed.get("direction_base", "")
+dir_value = naver_parsed.get("direction", "")
+
 col_dir1, col_dir2 = st.columns(2)
 with col_dir1:
     pos = st.selectbox(
@@ -395,30 +378,30 @@ with col_dir2:
         index=directions.index(dir_value) if dir_value in directions else 0,
     )
 
-# 층, 방수, 욕실수 한 줄에
+# 층, 방수, 욕실수
 col_a, col_b, col_c = st.columns(3)
 with col_a:
-    floor = st.text_input("층", naver_parsed.get("해당층", ""))
+    floor = st.text_input("층", naver_parsed.get("floor", ""))
 with col_b:
-    room = st.text_input("방수", naver_parsed.get("방수", ""))
+    room = st.text_input("방수", naver_parsed.get("num_rooms", ""))
 with col_c:
-    bath = st.text_input("욕실수", naver_parsed.get("화장실수", ""))
+    bath = st.text_input("욕실수", naver_parsed.get("num_bathrooms", ""))
 
-# 공급면적/전용면적 한 줄에
+# 공급면적/전용면적
 area_col1, area_col2 = st.columns(2)
 with area_col1:
-    supply_area = st.text_input(
-        "공급면적 (㎡)", br_title_parsed.get("연면적", naver_parsed.get("공급면적", ""))
-    )
+    supply_area = st.text_input("공급면적 (㎡)", naver_parsed.get("supply_area", ""))
 with area_col2:
-    exclusive_area = st.text_input("전용면적 (㎡)", naver_parsed.get("전용면적", ""))
+    exclusive_area = st.text_input(
+        "전용면적 (㎡)", naver_parsed.get("exclusive_area", "")
+    )
 
 # --- 구분선 ---
 st.divider()
 
 # 거래 조건 입력란 바로 위에 변수 초기화
 # 거래 조건 입력 제목 (폰트 약간 크게)
-st.markdown("### 💰 거래 조건", unsafe_allow_html=True)
+st.markdown("### 거래 조건", unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
 deposit = ""
@@ -426,47 +409,125 @@ rent = ""
 management = ""
 
 # 거래 조건 입력
-deal_type = st.radio("거래 종류", ["매매", "전세", "월세", "단기"])
+deal_type = st.radio(
+    "거래 종류",
+    ["매매", "전세", "월세", "단기"],
+    index=["매매", "전세", "월세", "단기"].index(naver_parsed.get("deal_type", "매매")),
+)
 
-sale_price, loan_amount, loan_type, term_months, term_condition = "", "", "", "", ""
+
+# 거래 조건별 자동 세팅
+sale_price = loan_amount = loan_type = deposit = rent = ""
+term_months = term_condition = ""
+
 if deal_type == "매매":
-    sale_price = st.text_input("매매가 (만원)", key="매매_매매가")
-    loan_amount = st.text_input("융자금 (만원)", key="매매_융자금")
+    sale_price = st.text_input(
+        "매매가 (만원)", naver_parsed.get("sale_price", ""), key="매매_매매가"
+    )
+    loan_amount = st.text_input(
+        "융자금 (만원)", naver_parsed.get("loan_amount", ""), key="매매_융자금"
+    )
+    loan_info_options = [
+        "미표기",
+        "융자금 없음",
+        "시세대비 30% 미만",
+        "시세대비 30% 이상",
+    ]
+    loan_info_value = naver_parsed.get("loan_info") or "미표기"
+    if loan_info_value not in loan_info_options:
+        loan_info_value = "미표기"
     loan_type = st.radio(
         "융자금 정보",
-        ["미표기", "융자금 없음", "시세대비 30% 미만", "시세대비 30% 이상"],
+        loan_info_options,
+        index=loan_info_options.index(loan_info_value),
         key="매매_융자정보",
     )
 elif deal_type == "전세":
-    deposit = st.text_input("전세가 (만원)", key="전세_보증금")
-    loan_amount = st.text_input("융자금 (만원)", key="전세_융자금")
+    deposit = st.text_input(
+        "전세가 (만원)", naver_parsed.get("charter_price", ""), key="전세_보증금"
+    )
+    loan_amount = st.text_input(
+        "융자금 (만원)", naver_parsed.get("loan_amount", ""), key="전세_융자금"
+    )
+    loan_info_options = [
+        "미표기",
+        "융자금 없음",
+        "시세대비 30% 미만",
+        "시세대비 30% 이상",
+    ]
+    loan_info_value = naver_parsed.get("loan_info") or "미표기"
+    if loan_info_value not in loan_info_options:
+        loan_info_value = "미표기"
     loan_type = st.radio(
         "융자금 정보",
-        ["미표기", "융자금 없음", "시세대비 30% 미만", "시세대비 30% 이상"],
+        loan_info_options,
+        index=loan_info_options.index(loan_info_value),
         key="전세_융자정보",
     )
+
 elif deal_type == "월세":
-    deposit = st.text_input("보증금 (만원)", key="월세_보증금")
-    rent = st.text_input("월세 (만원)", key="월세_월세")
-    loan_amount = st.text_input("융자금 (만원)", key="월세_융자금")
+    deposit = st.text_input(
+        "보증금 (만원)", naver_parsed.get("deposit", ""), key="월세_보증금"
+    )
+    rent = st.text_input(
+        "월세 (만원)", naver_parsed.get("rent_price", ""), key="월세_월세"
+    )
+    loan_amount = st.text_input(
+        "융자금 (만원)", naver_parsed.get("loan_amount", ""), key="월세_융자금"
+    )
+    loan_info_options = [
+        "미표기",
+        "융자금 없음",
+        "시세대비 30% 미만",
+        "시세대비 30% 이상",
+    ]
+    loan_info_value = naver_parsed.get("loan_info") or "미표기"
+    if loan_info_value not in loan_info_options:
+        loan_info_value = "미표기"
     loan_type = st.radio(
         "융자금 정보",
-        ["미표기", "융자금 없음", "시세대비 30% 미만", "시세대비 30% 이상"],
+        loan_info_options,
+        index=loan_info_options.index(loan_info_value),
         key="월세_융자정보",
     )
+
 elif deal_type == "단기":
-    deposit = st.text_input("보증금 (만원)", key="단기_보증금")
-    rent = st.text_input("월세 (만원)", key="단기_월세")
+    deposit = st.text_input(
+        "보증금 (만원)", naver_parsed.get("deposit", ""), key="단기_보증금"
+    )
+    rent = st.text_input(
+        "월세 (만원)", naver_parsed.get("rent_price", ""), key="단기_월세"
+    )
     term_months = st.selectbox(
-        "계약 기간 (개월)", list(range(1, 24)), key="단기_개월수"
+        "계약 기간 (개월)",
+        list(range(1, 24)),
+        index=int(naver_parsed.get("contract_period_month", 1)) - 1,
+        key="단기_개월수",
     )
     term_condition = st.radio(
-        "기간 조건", ["협의없음", "이내 협의가능", "이상 협의가능"], key="단기_조건"
+        "기간 조건",
+        ["협의없음", "이내 협의가능", "이상 협의가능"],
+        index=["협의없음", "이내 협의가능", "이상 협의가능"].index(
+            naver_parsed.get("contract_period_condition", "협의없음")
+        ),
+        key="단기_조건",
     )
-    loan_amount = st.text_input("융자금 (만원)", key="단기_융자금")
+    loan_amount = st.text_input(
+        "융자금 (만원)", naver_parsed.get("loan_amount", ""), key="단기_융자금"
+    )
+    loan_info_options = [
+        "미표기",
+        "융자금 없음",
+        "시세대비 30% 미만",
+        "시세대비 30% 이상",
+    ]
+    loan_info_value = naver_parsed.get("loan_info") or "미표기"
+    if loan_info_value not in loan_info_options:
+        loan_info_value = "미표기"
     loan_type = st.radio(
         "융자금 정보",
-        ["미표기", "융자금 없음", "시세대비 30% 미만", "시세대비 30% 이상"],
+        loan_info_options,
+        index=loan_info_options.index(loan_info_value),
         key="단기_융자정보",
     )
 
@@ -474,48 +535,41 @@ elif deal_type == "단기":
 st.divider()
 
 # 입주 가능일 입력 제목 (폰트 약간 크게)
-st.markdown("### 🗓️ 입주 가능일 선택", unsafe_allow_html=True)
+st.markdown("### 입주 가능일 선택", unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
 # 입주가능일 파싱: '2026년 6월 1일 협의가능' → 날짜, 협의가능
-move_in_radio_default = 0
-move_in_date_value = ""
-move_in_negotiate = False
-naver_move_in = naver_parsed.get("입주가능일", "")
-import re
+move_in_type_raw = naver_parsed.get("move_in_type", "")
+move_in_date_value = naver_parsed.get("move_in_date_value", "")
+move_in_negotiate = naver_parsed.get("move_in_negotiate", False)
 
-if naver_move_in:
-    if "즉시" in naver_move_in:
-        move_in_radio_default = 0
-    else:
-        move_in_radio_default = 1
-        # 날짜 추출
-        date_match = re.search(r"(\d{4})년 (\d{1,2})월 (\d{1,2})일", naver_move_in)
-        if date_match:
-            y, m, d = date_match.groups()
-            move_in_date_value = f"{y}-{int(m):02d}-{int(d):02d}"
-        if "협의" in naver_move_in:
-            move_in_negotiate = True
+# 기본값 판단
+move_in_radio_default = 0 if move_in_type_raw in ["즉시입주", "즉시 입주"] else 1
+
+if move_in_radio_default == 1 and move_in_date_value:
+    try:
+        y, m, d = map(int, move_in_date_value.split("-"))
+        default_date = datetime.date(y, m, d)
+    except:
+        default_date = None
+else:
+    default_date = None
 
 move_in_type = st.radio(
     "입주 가능 방식", ["즉시 입주", "날짜 선택"], index=move_in_radio_default
 )
+
 move_in_date = None
 if move_in_type == "날짜 선택":
-    import datetime
-
-    default_date = None
-    if move_in_date_value:
-        try:
-            y, m, d = map(int, move_in_date_value.split("-"))
-            default_date = datetime.date(y, m, d)
-        except:
-            default_date = None
     move_in_date = st.date_input(
-        "입주 가능일", value=default_date if default_date else None, format="YYYY-MM-DD"
+        "입주 가능일",
+        value=default_date if default_date else None,
+        format="YYYY-MM-DD",
     )
+
 move_in_negotiate = st.checkbox("협의 가능", value=move_in_negotiate)
 
+# 최종 문자열로 가공
 if move_in_type == "즉시 입주":
     move_in = "즉시입주"
 elif move_in_type == "날짜 선택" and move_in_date:
@@ -529,7 +583,7 @@ else:
 st.divider()
 
 # 매물 설명 제목 (폰트 약간 크게)
-st.markdown("### 📝 기타 정보", unsafe_allow_html=True)
+st.markdown("### 기타 정보", unsafe_allow_html=True)
 st.markdown("<br>", unsafe_allow_html=True)
 
 feature = st.text_input("매물 특징", "")
@@ -538,38 +592,137 @@ detail = st.text_area("상세 설명", "")
 # --- 구분선 ---
 st.divider()
 
-# 거래유형별 정보 조합
-if deal_type == "매매":
-    price_info = f"매매가 {sale_price}만원"
-elif deal_type == "전세":
-    price_info = f"전세가 {deposit}만원"
-elif deal_type == "월세":
-    price_info = f"보증금 {deposit}만원 / 월세 {rent}만원"
-elif deal_type == "단기":
-    price_info = f"보증금 {deposit}만원 / 월세 {rent}만원 / 계약 {term_months}개월 ({term_condition})"
 
-# 입력값 유효성 점검
-missing = []
-if not floor:
-    missing.append("층수")
-if not room:
-    missing.append("방수")
-if not supply_area or not exclusive_area:
-    missing.append("공급/전용면적")
-if not deposit and deal_type != "매매":
-    missing.append("보증금")
+def format_summary(
+    address,
+    property_type,
+    danji_name,
+    purpose,
+    floor,
+    room,
+    bath,
+    supply_area,
+    exclusive_area,
+    pos,
+    dir_,
+    deal_type,
+    sale_price,
+    deposit,
+    rent,
+    loan_amount,
+    loan_type,
+    term_months,
+    term_condition,
+    move_in,
+    feature,
+    detail,
+):
+    lines = []
+    # 1. 주소 및 기본 정보
+    if address:
+        lines.append(f"주소: {address}")
+    if danji_name:
+        lines.append(f"단지명: {danji_name}")
+    if property_type:
+        lines.append(f"매물 종류: {property_type}")
+    if purpose:
+        lines.append(f"건축물 용도: {purpose}")
+    if floor:
+        lines.append(f"해당 층: {floor}")
+    if room:
+        lines.append(f"방 수: {room}")
+    if bath:
+        lines.append(f"욕실 수: {bath}")
+    if supply_area:
+        lines.append(f"공급면적: {supply_area}㎡")
+    if exclusive_area:
+        lines.append(f"전용면적: {exclusive_area}㎡")
+    if pos or dir_:
+        pos_dir = []
+        if pos:
+            pos_dir.append(f"위치: {pos}")
+        if dir_:
+            pos_dir.append(f"방향: {dir_}")
+        lines.append(", ".join(pos_dir))
+    # 2. 거래 조건
+    lines.append(f"거래 종류: {deal_type}")
+    if deal_type == "매매":
+        if sale_price:
+            lines.append(f"매매가: {sale_price}만원")
+        if loan_amount:
+            lines.append(f"융자금: {loan_amount}만원")
+        if loan_type:
+            lines.append(f"융자금 정보: {loan_type}")
+    elif deal_type == "전세":
+        if deposit:
+            lines.append(f"전세가: {deposit}만원")
+        if loan_amount:
+            lines.append(f"융자금: {loan_amount}만원")
+        if loan_type:
+            lines.append(f"융자금 정보: {loan_type}")
+    elif deal_type == "월세":
+        if deposit:
+            lines.append(f"보증금: {deposit}만원")
+        if rent:
+            lines.append(f"월세: {rent}만원")
+        if loan_amount:
+            lines.append(f"융자금: {loan_amount}만원")
+        if loan_type:
+            lines.append(f"융자금 정보: {loan_type}")
+    elif deal_type == "단기":
+        if deposit:
+            lines.append(f"보증금: {deposit}만원")
+        if rent:
+            lines.append(f"월세: {rent}만원")
+        if term_months:
+            lines.append(f"계약 기간: {term_months}개월")
+        if term_condition:
+            lines.append(f"기간 조건: {term_condition}")
+        if loan_amount:
+            lines.append(f"융자금: {loan_amount}만원")
+        if loan_type:
+            lines.append(f"융자금 정보: {loan_type}")
+    # 3. 입주 가능일
+    if move_in:
+        lines.append(f"입주 가능일: {move_in}")
+    # 4. 매물 특징 및 상세 설명
+    if feature:
+        lines.append(f"매물 특징: {feature}")
+    if detail:
+        lines.append(f"상세 설명: {detail}")
+    return "\n".join(lines)
+
 
 # 요약 생성 버튼 가운데, 넓게
 center_col2 = st.columns([1, 2, 1])
 with center_col2[1]:
-    if st.button("📄 요약 생성", use_container_width=True):
-        if missing:
-            st.warning(f"❗ 필수 항목이 누락되었습니다: {', '.join(missing)}")
+    if st.button("요약 생성", use_container_width=True):
+        if bjd_code:
+            # 입력값 수집
+            summary = format_summary(
+                address=full_address,
+                property_type=property_type,
+                danji_name=danji_name,
+                purpose=purpose,
+                floor=floor,
+                room=room,
+                bath=bath,
+                supply_area=supply_area,
+                exclusive_area=exclusive_area,
+                pos=pos,
+                dir_=dir_,
+                deal_type=deal_type,
+                sale_price=sale_price,
+                deposit=deposit,
+                rent=rent,
+                loan_amount=loan_amount,
+                loan_type=loan_type,
+                term_months=term_months,
+                term_condition=term_condition,
+                move_in=move_in,
+                feature=feature,
+                detail=detail,
+            )
+            st.text_area("요약 내용", summary, height=400)
         else:
-            user_inputs = {}
-            if bjd_code:  # None이 아닐 때만 호출
-                result = ""
-                st.markdown("### ✅ 요약 결과")
-                st.text_area("요약 내용", result, height=400)
-            else:
-                st.warning("법정동 코드가 없습니다. 주소를 다시 확인해 주세요.")
+            st.warning("법정동 코드가 없습니다. 주소를 다시 확인해 주세요.")
